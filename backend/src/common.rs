@@ -10,6 +10,15 @@ pub fn local_day(time: DateTime<Utc>) -> NaiveDate {
         .date_naive()
 }
 
+/// 未指定 --database 时使用的服务数据库路径。
+pub fn default_database_path() -> Result<String> {
+    let home = std::env::var_os("HOME").ok_or("未设置 HOME")?;
+    Ok(std::path::Path::new(&home)
+        .join("Library/Application Support/mihomo-connections-tracker/tracker.db")
+        .display()
+        .to_string())
+}
+
 pub fn month_start(day: NaiveDate) -> NaiveDate {
     day.with_day(1).unwrap()
 }

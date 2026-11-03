@@ -125,6 +125,14 @@ pub fn routes(
     db: Arc<Database>,
     token: Option<String>,
 ) -> impl Filter<Extract = (impl Reply,), Error = Infallible> + Clone {
+    endpoints(db, token).recover(recover)
+}
+
+/// 查询 API 各端点，未做错误恢复；供调用方继续组合其他路由后统一 recover。
+pub fn endpoints(
+    db: Arc<Database>,
+    token: Option<String>,
+) -> impl Filter<Extract = (impl Reply,), Error = Rejection> + Clone {
     let database = warp::any().map(move || db.clone());
     let auth = warp::header::optional::<String>("authorization")
         .and_then(move |header: Option<String>| {
@@ -208,7 +216,6 @@ pub fn routes(
         .or(anomalies)
         .or(gaps)
         .boxed()
-        .recover(recover)
 }
 
 async fn stats(
@@ -242,7 +249,7 @@ async fn stats(
     }))
 }
 
-async fn recover(rejection: Rejection) -> std::result::Result<impl Reply, Infallible> {
+pub async fn recover(rejection: Rejection) -> std::result::Result<impl Reply, Infallible> {
     let (status, message) = if let Some(error) = rejection.find::<ApiError>() {
         match error {
             ApiError::BadRequest(message) => (StatusCode::BAD_REQUEST, message.clone()),

@@ -1,10 +1,20 @@
 # Mihomo 连接流量统计
 
-Rust 常驻后端直接采集一个 Mihomo，将数据写入 SQLite，提供只读查询 API。本项目不包含 UI，也不再支持 Master/Agent 或数据同步。
+Rust 常驻后端直接采集一个 Mihomo，将数据写入 SQLite，提供只读查询 API，并附带一个由 `web` 子命令启动的网页控制台。不再支持 Master/Agent 或数据同步。
 
 ## 编译和安装命令行工具
 
 以下命令均从仓库根目录执行，选择一种安装方式即可，无需 `sudo`。
+
+需要网页控制台时，先构建前端（要求 Node.js 与 pnpm），产物会嵌入二进制：
+
+```bash
+cd frontend
+pnpm install
+pnpm build
+```
+
+不执行这一步也能编译命令行工具，但 `web` 子命令没有页面可用；release 编译要求 `frontend/dist` 存在。
 
 ### 编译后安装到 ~/.local/bin
 
@@ -110,7 +120,7 @@ mihomo-connections-tracker service uninstall # 保留命令行程序、数据库
 
 ### 更新程序
 
-只更新程序时，覆盖原路径下的可执行文件，再重启服务即可，不需要重新输入配置和密钥。在仓库根目录执行：
+只更新程序时，覆盖原路径下的可执行文件，再重启服务即可，不需要重新输入配置和密钥。改动过前端代码时先在 `frontend` 目录执行 `pnpm build`，再在仓库根目录执行：
 
 ```bash
 cargo install --path ./backend --root "$HOME/.cargo" --force && \
@@ -184,6 +194,23 @@ mihomo-connections-tracker usage --group 节点选择 --month 2026-10
 ```
 
 时间参数 `--day` / `--month` / `--last` 三选一，都不传默认最近 7 天；日/月边界为北京时间。`--airport` / `--group` 二选一，不传值时列出该维度全部名称（按流量降序），用于先确认名称再精确查询。单位按 1024 进制格式化为 B/KB/MB/GB。默认读取服务数据库 `Library/Application Support/mihomo-connections-tracker/tracker.db`，前台运行等其他库通过 `--database` 指定。
+
+### Web 控制台
+
+`web` 子命令在前台启动网页控制台，同时提供页面与查询 API，不依赖采集服务是否运行（直接只读数据库，服务运行中也可安全共用）：
+
+```bash
+mihomo-connections-tracker web                                  # 默认 http://127.0.0.1:8081/
+mihomo-connections-tracker web --listen-port 9000 --database /path/to/tracker.db
+mihomo-connections-tracker web --api-token 密钥                  # 可选，保护查询接口
+```
+
+- 页面提供概览、机场、代理组三个视图：时间范围预设（今天/近 7 天/近 30 天/本月/上月）与自定义区间，机场/代理组排行可点击查看单个名称的每日上下行柱状图、汇总卡片与明细表，支持按日/按月聚合。机场维度中直连、拒绝、归属不明确的流量单独成行。
+- 设置了 `--api-token` 时，首次打开页面点击右上角「API 密钥」填入即可。
+- 端口默认 `8081`，避开采集服务的查询 API 默认端口 `8080`，两者可以同时运行。密钥也可通过 `TRACKER_API_TOKEN` 环境变量传入。
+- 仅前台运行，Ctrl+C 或 SIGTERM 退出；不提供、也不接入任何后台服务或开机自启方式。数据库文件不存在时直接报错退出，不会创建空库。
+
+前端开发模式：终端 1 运行 `cargo run --manifest-path backend/Cargo.toml -- web`，终端 2 在 `frontend` 目录运行 `pnpm dev`，开发服务器会把 `/api` 代理到 `127.0.0.1:8081`。
 
 ### 查询 API
 

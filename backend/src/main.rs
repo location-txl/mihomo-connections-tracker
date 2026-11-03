@@ -7,6 +7,7 @@ mod service;
 #[cfg(test)]
 mod tests;
 mod usage;
+mod web;
 
 use common::Result;
 use config::Invocation;
@@ -24,6 +25,7 @@ async fn main() -> Result<()> {
         )?,
         Invocation::Service(command) => return service::run(command),
         Invocation::Usage(args) => return usage::run(args).await,
+        Invocation::Web(args) => return web::run(args).await,
     };
     #[cfg(unix)]
     let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;

@@ -1,5 +1,5 @@
 use crate::{
-    common::{local_day, month_start, Result},
+    common::{default_database_path, local_day, month_start, Result},
     config::UsageArgs,
     db::Database,
 };
@@ -37,14 +37,10 @@ fn non_empty(value: Option<&str>) -> Option<&str> {
 }
 
 fn database_path(args: &UsageArgs) -> Result<String> {
-    if let Some(path) = &args.database {
-        return Ok(path.clone());
+    match &args.database {
+        Some(path) => Ok(path.clone()),
+        None => default_database_path(),
     }
-    let home = std::env::var_os("HOME").ok_or("未设置 HOME")?;
-    Ok(std::path::Path::new(&home)
-        .join("Library/Application Support/mihomo-connections-tracker/tracker.db")
-        .display()
-        .to_string())
 }
 
 struct TimeRange {

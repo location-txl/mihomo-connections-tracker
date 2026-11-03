@@ -79,6 +79,23 @@ struct ServiceArgs {
     command: ServiceCommand,
 }
 
+/// 启动 Web 控制台，前台运行，Ctrl+C 退出。
+#[derive(Parser)]
+pub struct WebArgs {
+    /// HTTP 监听地址。
+    #[arg(long, default_value = "127.0.0.1")]
+    pub listen_host: std::net::IpAddr,
+    /// HTTP 监听端口，默认 8081 以避开采集服务的查询 API。
+    #[arg(long, default_value_t = 8081)]
+    pub listen_port: u16,
+    /// SQLite 文件，默认使用用户应用目录中的 tracker.db。
+    #[arg(long)]
+    pub database: Option<String>,
+    /// 查询接口密钥，不设置则无需认证。
+    #[arg(long, env = "TRACKER_API_TOKEN", hide_env_values = true)]
+    pub api_token: Option<String>,
+}
+
 #[derive(Subcommand)]
 pub enum ServiceCommand {
     /// 安装或更新服务，立即启动并开启登录自启。
@@ -117,6 +134,8 @@ enum Command {
     Service(ServiceArgs),
     /// 查询流量统计。
     Usage(UsageArgs),
+    /// 启动 Web 控制台，前台运行。
+    Web(WebArgs),
     #[command(hide = true)]
     Run,
 }
@@ -125,6 +144,7 @@ pub enum Invocation {
     Run,
     Service(ServiceCommand),
     Usage(UsageArgs),
+    Web(WebArgs),
 }
 
 pub fn parse_args(
@@ -152,6 +172,8 @@ pub fn parse_args(
         Ok(Invocation::Service(command))
     } else if let Some(usage) = matches.subcommand_matches("usage") {
         Ok(Invocation::Usage(UsageArgs::from_arg_matches(usage)?))
+    } else if let Some(web) = matches.subcommand_matches("web") {
+        Ok(Invocation::Web(WebArgs::from_arg_matches(web)?))
     } else {
         Ok(Invocation::Run)
     }
@@ -184,7 +206,8 @@ mod cli_tests {
             parse(&["tracker", "run"]).unwrap(),
             Invocation::Run
         ));
-        let help = Cli::command().render_long_help().to_string();
+        // 顶层不接受配置参数；web 子命令的 --database 只在其自身生效。
+        let help = Cli::command().render_help().to_string();
         assert!(!help.contains("--database"));
         assert!(!help.contains("--main-airport"));
         assert!(parse(&["tracker"]).is_err());
@@ -288,5 +311,34 @@ mod cli_tests {
         ] {
             assert!(parse(&args).is_err(), "应互斥：{args:?}");
         }
+    }
+
+    #[test]
+    fn web_options_parse() {
+        let Invocation::Web(web) = parse(&[
+            "tracker",
+            "web",
+            "--listen-port",
+            "9000",
+            "--database",
+            "x.db",
+        ])
+        .unwrap() else {
+            panic!("expected web");
+        };
+        assert_eq!(web.listen_port, 9000);
+        assert_eq!(web.listen_host.to_string(), "127.0.0.1");
+        assert_eq!(web.database.as_deref(), Some("x.db"));
+        assert_eq!(web.api_token, None);
+
+        let Invocation::Web(web) = parse(&["tracker", "web"]).unwrap() else {
+            panic!("expected web");
+        };
+        assert_eq!(web.listen_port, 8081);
+        assert_eq!(web.database, None);
+
+        // web 不接受采集服务的配置参数。
+        assert!(parse(&["tracker", "web", "--main-airport", "主机场"]).is_err());
+        assert!(parse(&["tracker", "web", "--mihomo-port", "9090"]).is_err());
     }
 }
