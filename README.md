@@ -1,148 +1,87 @@
-# Mihomo 连接跟踪器 - 主从架构版
+# Mihomo 连接流量统计
 
-此程序用于跟踪 [Mihomo](https://github.com/MetaCubeX/mihomo) (Clash Meta 内核) 的连接信息，并将其存储在数据库中。支持主从架构，允许多个从节点（Agent）将数据同步到一个中央主节点（Master），同时支持离线操作。
+Rust 常驻后端直接采集一个 Mihomo，将数据写入 SQLite，提供只读查询 API。本项目不包含 UI，也不再支持 Master/Agent 或数据同步。
 
-## 功能特点
-
-- **主从架构**：支持一个 Master 节点和多个 Agent 节点。
-- **数据同步**：Agent 自动将连接数据同步到 Master。
-- **离线工作**：Master 不可用时，Agent 在本地存储数据。
-- **自动恢复**：Master 恢复在线后，Agent 自动同步本地累积的数据。
-- **认证支持**：Master 和 Agent 之间的 API 通信支持 Bearer Token 认证。
-- **独立运行**：Master 支持独立运行模式，可直接连接本地 Mihomo 收集数据。
-- **实时监控**：在控制台实时显示连接状态变化（新建、关闭、流量更新）。
-- **统计分析 API**：Master 提供丰富的统计查询 API，支持多种筛选、聚合和时间序列分析。
-- **高性能设计**：采用 Rust 和 Tokio 异步模型，支持高并发连接处理。
-- **持久化存储**：使用 SQLite 数据库存储连接记录。
-
-## 使用方法
-
-程序通过命令行参数配置，分为两种运行模式：主节点服务器 (master) 和从节点客户端 (agent)。
-
-### 构建程序
-
-确保你已经安装了 Rust 工具链 ([rustup](https://rustup.rs/))。
+## 启动
 
 ```bash
+cd backend
 cargo build --release
-```
-
-编译后的二进制文件位于 `./target/release/mihomo-connections-tracker` (文件名可能根据 `Cargo.toml` 中的设置有所不同)。以下示例假设二进制文件名为 `mihomo-connections-tracker`。
-
-### 运行主节点 (Master)
-
-Master 节点负责接收来自 Agent 的数据，存储数据，并提供查询 API。
-
-```bash
-./target/release/mihomo-connections-tracker master \
-  --database ./master.db \
-  --listen-host 0.0.0.0 \
-  --listen-port 9091 \
-  --api-token your-secret-token
-```
-
-**Master 节点参数说明:**
-
-*   `--database <PATH>`: (必需) 主数据库文件路径 (SQLite)。
-*   `--listen-host <HOST>`: (必需) API 服务器监听的主机地址。
-*   `--listen-port <PORT>`: (必需) API 服务器监听的端口。
-*   `--api-token <TOKEN>`: (可选) 设置 API 认证令牌。如果设置，Agent 连接和 API 查询都需要提供此令牌。
-
-#### 主节点独立运行 (连接本地 Mihomo)
-
-Master 节点也可以直接连接本地运行的 Mihomo 实例来收集数据，无需 Agent。
-
-```bash
-./target/release/mihomo-connections-tracker master \
-  --database ./master.db \
-  --listen-host 0.0.0.0 \
-  --listen-port 9091 \
-  --api-token your-secret-token \
+read -rs 'MIHOMO_TOKEN?Mihomo 密钥: '; echo
+export MIHOMO_TOKEN
+./target/release/mihomo-connections-tracker \
   --mihomo-host 127.0.0.1 \
-  --mihomo-port 9090 \
-  --mihomo-token your-mihomo-secret-token
+  --mihomo-port 9097 \
+  --main-airport '主机场' \
+  --database tracker.db
 ```
 
-**附加参数说明 (独立运行模式):**
+上面的密钥输入示例适用于 zsh；也可通过进程环境注入 `MIHOMO_TOKEN`。不需要认证时不设置此变量。密钥不写入数据库或日志。
 
-*   `--mihomo-host <HOST>`: (必需，若启用此模式) 本地 Mihomo API 服务器地址。
-*   `--mihomo-port <PORT>`: (可选) 本地 Mihomo API 服务器端口 (默认: 9090)。
-*   `--mihomo-token <TOKEN>`: (可选) 本地 Mihomo API 认证令牌 (如果 Mihomo 配置了 `secret`)。
+| 参数 | 默认值 / 含义 |
+|---|---|
+| `--database` | `tracker.db`，SQLite 文件 |
+| `--mihomo-host` | `127.0.0.1`，单个 Mihomo HTTP 控制接口 |
+| `--mihomo-port` | `9090` |
+| `--mihomo-token` | 可选，优先使用环境变量 `MIHOMO_TOKEN` 注入 |
+| `--main-airport` | 必填，空 Provider 节点归属的机场名 |
+| `--listen-host` | `127.0.0.1`，查询 API 监听地址 |
+| `--listen-port` | `8080` |
+| `--api-token` | 可选，也可使用 `TRACKER_API_TOKEN`，保护健康检查以外的查询接口 |
 
-### 运行从节点 (Agent)
+按 Ctrl+C 时完成当前数据库事务再退出。连接失败每 5 秒重连；15 秒没有有效快照会重新连接。
 
-Agent 节点连接本地 Mihomo 获取连接数据，并将数据发送到 Master 节点。如果 Master 节点不可用，数据会暂存在本地。
+## 统计口径
+
+- 使用官方 `/connections?interval=1000` WebSocket，每秒接收活跃连接快照。使用 `/proxies` 和 `/providers/proxies` 识别代理组、节点类型和 Provider；启动、重连及每 60 秒刷新代理信息。
+- 保留原始 `chains`、`providerChains` 顺序。出口节点对应的 Provider 为 `null`、空字符串，或整个 `providerChains` 为 `null` / 缺失时，普通代理归 `--main-airport`；非空 Provider 名作为机场名。
+- 按节点类型区分直连、拒绝和普通代理，支持 `DIRECT-IPV4` 这类直连别名。直连、拒绝不归入主机场。
+- 每条连接首次观察时固定机场、节点和代理组归属。链上每个代理组各统计一次，全局流量只统计一次；各组总量不可相加当作全局总量。
+- 多个终端节点、拨号代理链、节点无法识别或链长度不一致时，机场归属为 `ambiguous`，不向候选机场重复累计。
+- 流量按累计值的差计算。首次启动前就存在的连接只建立基线；监控期间新建的连接计入首次观察的累计值。基线持久化，重启不会重复累计。
+- 原始计数下降时保存 `counter_reset` 异常并重建基线，该次增量为零。
+- 时间戳使用 UTC Unix 毫秒；日/月边界固定为北京时间 UTC+8，自然月统计。增量归接收快照当天，跨午夜存在采样级误差。
+- 断采后仍存活连接的增量归恢复当天，断采区间单独保存，不推算间断期间的每日分布。连接消失时间是观察到消失的时间，不是精确关闭时间。
+- 单位为字节，`total = upload + download`。不根据节点名中的 `6x` 等字符推测机场计费倍率。
+
+**这是连接采样统计，不是完整 HTTP 请求日志或机场账单。** 采样间隔内完成的短连接和关闭前的尾流可能漏计。连接域名优先使用 `host`，其次 `sniffHost`；没有域名则保留目标 IP，域名为 `null`，不通过反向 DNS 猜测。
+
+## 数据保存
+
+| 表 | 用途与保留策略 |
+|---|---|
+| `connections` | 连接元数据、固定归属、原始计数基线、已观察流量、最后观察状态 |
+| `connection_groups` | 连接经过的代理组，去重保存 |
+| `connection_daily_usage` | 每连接每日用量，保留当前月及此前 11 个自然月 |
+| `daily_totals` | 全局、机场和代理组的每日上下行汇总，长期保留 |
+| `attribution_anomalies` | 归属/计数异常及原始诊断证据，长期保留 |
+| `collection_gaps` | 断采区间，长期保留 |
+| `collector_state` | 采集状态及最后成功时间 |
+
+启动以及采集跨日时清理过期明细；活跃或断采中状态未知的连接保留基线。已消失且没有保留期内明细的连接元数据随之清理。每日汇总、异常及断采记录不受明细清理影响。
+
+异常按 `(connection_id, reason)` 去重，保留首次和最近的完整连接 JSON（包括未知字段）、首次异常的原始 `/proxies`、`/providers/proxies`、Mihomo 版本和拓扑获取时间，以及首次/最近观察时间和出现次数。不会为每秒重复保存整份拓扑。异常不关联连接明细外键，因此明细清理不会删除诊断证据。
+
+单个采集任务顺序处理快照，在同一事务里提交计数基线、连接日用量、每日汇总和异常；数据库失败会结束服务并报告错误。SQLite 使用 WAL。数据库应只由一个采集进程写入。
+
+## 查询和验证
 
 ```bash
-./target/release/mihomo-connections-tracker agent \
-  --mihomo-host 127.0.0.1 \
-  --mihomo-port 9090 \
-  --mihomo-token your-mihomo-secret-token \
-  --master-url http://<master_ip>:9091 \
-  --master-token your-secret-token \
-  --local-database ./agent.db \
-  --agent-id my-unique-agent-id \
-  --data-retention-days 7
+curl 'http://127.0.0.1:8080/api/v1/stats?dimension=airport&period=month'
+curl 'http://127.0.0.1:8080/api/v1/stats?dimension=group&period=day'
+curl 'http://127.0.0.1:8080/api/v1/connections?month=2026-11&domain=chatgpt.com'
+curl 'http://127.0.0.1:8080/api/v1/anomalies'
+
+cd backend
+cargo fmt --check
+cargo check
+cargo test
 ```
 
-**Agent 节点参数说明:**
+设置查询密钥时携带 `Authorization: Bearer <查询密钥>`。参数、字段和示例见 [API 文档](api.md)。
 
-*   `--mihomo-host <HOST>`: (必需) 本地 Mihomo API 服务器地址。
-*   `--mihomo-port <PORT>`: (可选) 本地 Mihomo API 服务器端口 (默认: 9090)。
-*   `--mihomo-token <TOKEN>`: (可选) 本地 Mihomo API 认证令牌 (如果 Mihomo 配置了 `secret`)。
-*   `--master-url <URL>`: (必需) Master 节点的 API 地址 (例如 `http://192.168.1.10:9091`)。
-*   `--master-token <TOKEN>`: (可选) Master 节点的 API 认证令牌 (如果 Master 配置了 `--api-token`)。
-*   `--local-database <PATH>`: (必需) Agent 本地数据库文件路径 (SQLite)，用于离线缓存。
-*   `--agent-id <ID>`: (必需) 当前 Agent 节点的唯一标识符。Master 通过此 ID 区分不同来源的数据。
-*   `--sync-interval <SECONDS>`: (可选) 向 Master 同步数据的间隔时间（秒，默认 60）。
-*   `--data-retention-days <DAYS>`: (可选) 数据保留天数，超过该天数的已同步数据会被自动删除（默认 7）。
+## 旧版迁移边界
 
-## 离线模式
+`master`、`agent` 子命令以及 `/sync`、`/agents` 等接口已移除。使用新的数据库路径启动；检测到旧版数据库的 `sync_state` 表或 `agent_id` 列时会拒绝打开，不自动迁移或拆分旧累计流量。旧文件保留供原版本读取，不能从旧累计值还原历史每日用量。
 
-如果 Agent 在启动时未提供 `--master-url`，或者提供的 Master 节点暂时无法访问，Agent 将进入离线模式：
-1.  连接数据将只存储在 `--local-database` 指定的本地 SQLite 文件中。
-2.  如果配置了 `--master-url`，Agent 会定期尝试重新连接 Master。
-3.  一旦 Master 恢复连接，Agent 会将本地缓存的所有未同步数据批量发送给 Master。
-
-## 数据库
-
-*   使用 SQLite 作为数据库。
-*   Master 数据库 (`--database`) 存储所有 Agent 的聚合数据。
-*   Agent 数据库 (`--local-database`) 存储该 Agent 的数据，主要用于离线缓存。
-*   `connections` 表结构包含了详细的连接信息，主键为 `(id, agent_id)`。
-
-## 实时监控
-
-程序启动后，会在控制台实时打印连接事件日志：
-*   **新连接**: 显示连接的基本信息 (协议, 源/目标 IP:Port, 规则, 代理链等)。
-*   **连接关闭**: 显示连接 ID 和该连接的总计上/下行流量。
-*   **流量更新**: (如果日志级别允许) 会定期显示活动连接的流量变化。
-
-## 主节点 API
-
-Master 节点提供一个 HTTP API 用于查询统计数据和接收 Agent 同步。
-
-**API Base URL**: `http://<master-listen-host>:<master-listen-port>/api/v1`
-
-**主要端点**:
-
-*   `GET /api/v1/health`: 健康检查，无需认证。
-*   `POST /api/v1/sync`: Agent 同步数据接口，**需要认证** (如果 Master 配置了 `--api-token`)。
-*   `GET /api/v1/stats`: 获取统计数据接口，**需要认证** (如果 Master 配置了 `--api-token`)。
-
-**详细的 API 文档，包括请求/响应结构、参数说明和示例，请参见 [API.md](api.md) 文件。**
-
-## 技术栈
-
-*   **语言**: Rust (Stable)
-*   **异步运行时**: Tokio
-*   **Web 框架 (API Server)**: Warp
-*   **HTTP 客户端**: Reqwest
-*   **WebSocket 客户端**: tokio-tungstenite
-*   **数据库**: SQLite (via SQLx)
-*   **命令行解析**: Clap
-*   **序列化/反序列化**: Serde
-
----
-
-**注意**: 请将示例命令中的 `./target/release/mihomo-connections-tracker` 替换为实际的二进制文件路径和名称。
+数据源依据：[Mihomo 官方 API](https://wiki.metacubex.one/en/api/#connections)。文档与当前版本返回值存在差异时，以实际响应保留的原始数据作为诊断依据。

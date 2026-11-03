@@ -1,386 +1,237 @@
-use serde::{Deserialize, Serialize};
+use chrono::{DateTime, Datelike, FixedOffset, Months, NaiveDate, Utc};
+use serde::Deserialize;
 use serde_json::Value;
-use std::collections::HashSet;
-use chrono::{DateTime, Utc};
-use std::sync::Arc;
-use crate::db::Database;
+use std::collections::{HashMap, HashSet};
 
-// 用于在服务器和客户端之间同步的结构
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct SyncPackage {
-    pub agent_id: String,
-    pub connections: Vec<ConnectionRecord>,
-    pub timestamp: DateTime<Utc>,
+pub type Result<T> = std::result::Result<T, Box<dyn std::error::Error + Send + Sync>>;
+
+pub fn local_day(time: DateTime<Utc>) -> NaiveDate {
+    time.with_timezone(&FixedOffset::east_opt(8 * 3600).unwrap())
+        .date_naive()
 }
 
-// 数据库中存储的连接记录
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct ConnectionRecord {
-    pub id: String,
-    pub download: i64,
-    pub upload: i64,
-    pub last_updated: String,
-    pub start: String,
-    pub network: String,
-    pub conn_type: String,
-    pub source_ip: String,
-    pub destination_ip: String,
-    pub source_geoip: String,
-    pub destination_geoip: String,
-    pub source_ip_asn: String,
-    pub destination_ip_asn: String,
-    pub source_port: String,
-    pub destination_port: String,
-    pub inbound_ip: String,
-    pub inbound_port: String,
-    pub inbound_name: String,
-    pub inbound_user: String,
-    pub host: String,
-    pub dns_mode: String,
-    pub uid: i64,
-    pub process: String,
-    pub process_path: String,
-    pub special_proxy: String,
-    pub special_rules: String,
-    pub remote_destination: String,
-    pub dscp: i64,
-    pub sniff_host: String,
-    pub chains: String,
-    pub rule: String,
-    pub rule_payload: String,
-    pub agent_id: Option<String>,
+pub fn month_start(day: NaiveDate) -> NaiveDate {
+    day.with_day(1).unwrap()
 }
 
-// 从 Mihomo API 接收的数据结构
-#[derive(Deserialize, Debug, Clone)]
-pub struct GlobalData {
-    #[serde(deserialize_with = "deserialize_connections")]
-    pub connections: Vec<Connection>,
+pub fn retention_cutoff(now: DateTime<Utc>) -> NaiveDate {
+    month_start(local_day(now)) - Months::new(11)
 }
 
-#[derive(Deserialize, Debug, Clone)]
+#[derive(Debug, Deserialize)]
 pub struct Connection {
     pub id: String,
-    pub download: i64,
     pub upload: i64,
-    pub start: String, // ISO8601 string
-    pub metadata: ConnectionMetadata,
-    #[serde(deserialize_with = "deserialize_chains")]
+    pub download: i64,
+    pub start: DateTime<Utc>,
+    pub metadata: Metadata,
     pub chains: Vec<String>,
+    #[serde(rename = "providerChains", default)]
+    pub provider_chains: Option<Vec<Option<String>>>,
     pub rule: String,
     #[serde(rename = "rulePayload")]
     pub rule_payload: String,
 }
 
-#[derive(Deserialize, Debug, Clone)]
-pub struct ConnectionMetadata {
+#[derive(Debug, Deserialize)]
+pub struct Metadata {
     pub network: String,
-    #[serde(rename = "type")]
-    pub conn_type: String,
-    #[serde(rename = "sourceIP")]
-    pub source_ip: String,
-    #[serde(rename = "destinationIP")]
-    pub destination_ip: String,
-    #[serde(rename = "sourceGeoIP")]
-    pub source_geoip: Value,
-    #[serde(rename = "destinationGeoIP")]
-    pub destination_geoip: Value,
-    #[serde(rename = "sourceIPASN")]
-    pub source_ip_asn: String,
-    #[serde(rename = "destinationIPASN")]
-    pub destination_ip_asn: String,
-    #[serde(rename = "sourcePort")]
-    pub source_port: String,
-    #[serde(rename = "destinationPort")]
-    pub destination_port: String,
-    #[serde(rename = "inboundIP")]
-    pub inbound_ip: String,
-    #[serde(rename = "inboundPort")]
-    pub inbound_port: String,
-    #[serde(rename = "inboundName")]
-    pub inbound_name: String,
-    #[serde(rename = "inboundUser")]
-    pub inbound_user: String,
+    #[serde(default)]
     pub host: String,
-    #[serde(rename = "dnsMode")]
-    pub dns_mode: String,
-    pub uid: i64,
-    pub process: String,
-    #[serde(rename = "processPath")]
-    pub process_path: String,
-    #[serde(rename = "specialProxy")]
-    pub special_proxy: String,
-    #[serde(rename = "specialRules")]
-    pub special_rules: String,
-    #[serde(rename = "remoteDestination")]
-    pub remote_destination: String,
-    pub dscp: i64,
-    #[serde(rename = "sniffHost")]
+    #[serde(rename = "sniffHost", default)]
     pub sniff_host: String,
+    #[serde(rename = "destinationIP", default)]
+    pub destination_ip: String,
+    #[serde(default)]
+    pub process: String,
 }
 
-// 连接跟踪器的状态
-#[derive(Debug)]
-pub struct ConnectionState {
-    pub flow_cache: std::collections::HashMap<String, (i64, i64)>, // id -> (download, upload)
-    pub active_connections: HashSet<String>,
-}
-
-impl ConnectionState {
-    pub fn new() -> Self {
-        Self {
-            flow_cache: std::collections::HashMap::new(),
-            active_connections: HashSet::new(),
-        }
-    }
-}
-
-// 从 Connection 转换为 ConnectionRecord
-pub fn connection_to_record(conn: &Connection, agent_id: Option<String>) -> ConnectionRecord {
-    // 确保使用UTC格式的ISO 8601时间
-    let last_updated = Utc::now().to_rfc3339();
-    let chains = serde_json::to_string(&conn.chains).unwrap_or_else(|_| "[]".to_string());
-    let source_geoip = serde_json::to_string(&conn.metadata.source_geoip)
-        .unwrap_or_else(|_| "{}".to_string());
-    let destination_geoip = serde_json::to_string(&conn.metadata.destination_geoip)
-        .unwrap_or_else(|_| "{}".to_string());
-
-    // 确保start时间也是UTC格式
-    // 如果conn.start已经是UTC格式的RFC3339，则直接使用
-    // 否则尝试解析并转换为UTC格式
-    let start = if conn.start.ends_with('Z') || conn.start.contains('+') {
-        // 已经是ISO 8601格式，包含时区信息
-        conn.start.clone()
-    } else {
-        // 尝试解析为本地时间并转换为UTC
-        match chrono::DateTime::parse_from_str(&conn.start, "%Y-%m-%dT%H:%M:%S%.f") {
-            Ok(dt) => dt.with_timezone(&Utc).to_rfc3339(),
-            Err(_) => {
-                // 无法解析，保持原样
-                conn.start.clone()
-            }
-        }
-    };
-
-    ConnectionRecord {
-        id: conn.id.clone(),
-        download: conn.download,
-        upload: conn.upload,
-        last_updated,
-        start,
-        network: conn.metadata.network.clone(),
-        conn_type: conn.metadata.conn_type.clone(),
-        source_ip: conn.metadata.source_ip.clone(),
-        destination_ip: conn.metadata.destination_ip.clone(),
-        source_geoip,
-        destination_geoip,
-        source_ip_asn: conn.metadata.source_ip_asn.clone(),
-        destination_ip_asn: conn.metadata.destination_ip_asn.clone(),
-        source_port: conn.metadata.source_port.clone(),
-        destination_port: conn.metadata.destination_port.clone(),
-        inbound_ip: conn.metadata.inbound_ip.clone(),
-        inbound_port: conn.metadata.inbound_port.clone(),
-        inbound_name: conn.metadata.inbound_name.clone(),
-        inbound_user: conn.metadata.inbound_user.clone(),
-        host: conn.metadata.host.clone(),
-        dns_mode: conn.metadata.dns_mode.clone(),
-        uid: conn.metadata.uid,
-        process: conn.metadata.process.clone(),
-        process_path: conn.metadata.process_path.clone(),
-        special_proxy: conn.metadata.special_proxy.clone(),
-        special_rules: conn.metadata.special_rules.clone(),
-        remote_destination: conn.metadata.remote_destination.clone(),
-        dscp: conn.metadata.dscp,
-        sniff_host: conn.metadata.sniff_host.clone(),
-        chains,
-        rule: conn.rule.clone(),
-        rule_payload: conn.rule_payload.clone(),
-        agent_id,
-    }
-}
-
-pub fn deserialize_connections<'de, D>(deserializer: D) -> Result<Vec<Connection>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let opt = Option::<Vec<Connection>>::deserialize(deserializer)?;
-    Ok(opt.unwrap_or_default())
-}
-
-pub fn deserialize_chains<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let mut chains: Vec<String> = Vec::deserialize(deserializer)?;
-    chains.reverse();
-    Ok(chains)
-}
-
-// 格式化流量大小为人类可读格式
-pub fn format_bytes(bytes: i64) -> String {
-    const KB: i64 = 1024;
-    const MB: i64 = KB * 1024;
-    const GB: i64 = MB * 1024;
-    
-    if bytes >= GB {
-        format!("{:.2} GB", bytes as f64 / GB as f64)
-    } else if bytes >= MB {
-        format!("{:.2} MB", bytes as f64 / MB as f64)
-    } else if bytes >= KB {
-        format!("{:.2} KB", bytes as f64 / KB as f64)
-    } else {
-        format!("{} B", bytes)
-    }
-}
-
-// 处理连接更新的公共函数 - 主从节点都可以调用
-pub fn process_connections(
-    data: &GlobalData,
-    state_lock: &mut ConnectionState,
-    db: Arc<Database>,
-    agent_id: Option<String>
-) -> Result<(), String> {
-    // 获取当前连接ID集合
-    let current_conn_ids: std::collections::HashSet<_> = data.connections.iter()
-        .map(|c| c.id.clone())
-        .collect();
-    
-    // 第一步：检测并显示新连接 - 这些需要插入数据库
-    let new_conns: Vec<_> = current_conn_ids
-        .difference(&state_lock.active_connections)
-        .cloned()
-        .collect();
-    
-    if !new_conns.is_empty() {
-        println!("新连接 ({}):", new_conns.len());
-        for conn_id in &new_conns {
-            if let Some(conn) = data.connections.iter().find(|c| &c.id == conn_id) {
-                println!(
-                    "  - {} {}:{} -> {}:{} (规则: {}; {}, 链路: {})",
-                    conn.metadata.network,
-                    conn.metadata.source_ip,
-                    conn.metadata.source_port,
-                    conn.metadata.destination_ip,
-                    conn.metadata.destination_port,
-                    conn.rule,
-                    conn.rule_payload,
-                    conn.chains.join("->")
-                );
-            }
-        }
-    }
-    
-    // 第二步：检测并显示关闭的连接
-    let closed_conns: Vec<_> = state_lock.active_connections
-        .difference(&current_conn_ids)
-        .cloned()
-        .collect();
-    
-    if !closed_conns.is_empty() {
-        println!("关闭连接 ({}):", closed_conns.len());
-        for conn_id in &closed_conns {
-            if let Some(conn_info) = state_lock.flow_cache.get(conn_id) {
-                let download = conn_info.0;
-                let upload = conn_info.1;
-                println!(
-                    "  - {} [↑: {}, ↓: {}, 总计: {}]",
-                    conn_id,
-                    format_bytes(upload),
-                    format_bytes(download),
-                    format_bytes(upload + download)
-                );
-            } else {
-                println!("  - {}", conn_id);
-            }
-            // 从缓存中删除已关闭的连接信息
-            state_lock.flow_cache.remove(conn_id);
-        }
-    }
-    
-    // 第三步：检测流量变化 - 这些需要更新数据库
-    // 收集需要更新数据库的连接
-    let mut connections_to_update = Vec::new();
-    // 收集仅流量有变化的连接（用于显示）
-    let mut flow_changed_connections = Vec::new();
-    
-    for conn in &data.connections {
-        // 检查是否是新连接
-        let is_new_connection = new_conns.contains(&conn.id);
-        
-        // 检查流量是否有变化
-        let has_flow_change = if let Some((old_download, old_upload)) = state_lock.flow_cache.get(&conn.id) {
-            *old_upload != conn.upload || *old_download != conn.download
+impl Metadata {
+    pub fn domain(&self) -> Option<String> {
+        let host = if self.host.is_empty() {
+            &self.sniff_host
         } else {
-            // 如果缓存中没有，也视为需要更新
-            true
+            &self.host
         };
-        
-        // 如果是新连接或有流量变化，需要更新数据库
-        if is_new_connection || has_flow_change {
-            connections_to_update.push(conn);
-        }
-        
-        // 如果只是流量变化（非新连接），添加到流量变化列表
-        if has_flow_change && !is_new_connection {
-            flow_changed_connections.push((
-                conn.metadata.network.clone(),
-                format!("{}:{}", conn.metadata.source_ip, conn.metadata.source_port),
-                format!("{}:{}", conn.metadata.destination_ip, conn.metadata.destination_port),
-                conn.upload,
-                conn.download
-            ));
-        }
-        
-        // 更新流量缓存
-        state_lock.flow_cache.insert(conn.id.clone(), (conn.download, conn.upload));
-    }
-    
-    // 第四步：显示流量变化的连接
-    if !flow_changed_connections.is_empty() {
-        println!("连接流量更新 ({}):", flow_changed_connections.len());
-        for (network, source, destination, upload, download) in &flow_changed_connections {
-            let total = upload + download;
-            println!(
-                "  - {} {} -> {} [↑: {}, ↓: {}, 总计: {}]",
-                network,
-                source,
-                destination,
-                format_bytes(*upload),
-                format_bytes(*download),
-                format_bytes(total)
-            );
+        if host.is_empty() || host.parse::<std::net::IpAddr>().is_ok() {
+            None
+        } else {
+            Some(host.trim_end_matches('.').to_lowercase())
         }
     }
-    
-    // 最后：更新当前状态
-    state_lock.active_connections = current_conn_ids;
-    
-    // 只有当有变化的连接时才更新数据库
-    if !connections_to_update.is_empty() {
-        // 在后台任务中处理数据库更新
-        let db_clone = db.clone();
-        let agent_id_clone = agent_id.clone();
-        
-        // 将需要更新的连接克隆一份
-        let connections_to_update: Vec<Connection> = connections_to_update.iter()
-            .map(|&conn| conn.clone())
-            .collect();
-        
-        // 立即执行数据库更新
-        tokio::spawn(async move {
-            // 准备要更新的记录
-            let records: Vec<_> = connections_to_update.iter()
-                .map(|conn| connection_to_record(conn, agent_id_clone.clone()))
-                .collect();
-            
-            // 执行批量更新
-            if let Err(e) = db_clone.batch_upsert_records(&records).await {
-                eprintln!("批量更新连接数据错误: {}", e);
+}
+
+pub struct Observation {
+    pub connection: Connection,
+    pub raw: Value,
+}
+
+pub fn parse_snapshot(text: &str) -> Result<Vec<Observation>> {
+    #[derive(Deserialize)]
+    struct Snapshot {
+        #[serde(deserialize_with = "nullable_connections")]
+        connections: Vec<Value>,
+    }
+    fn nullable_connections<'de, D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Vec<Value>, D::Error> {
+        Ok(Option::<Vec<Value>>::deserialize(deserializer)?.unwrap_or_default())
+    }
+
+    let snapshot: Snapshot = serde_json::from_str(text)?;
+    let mut ids = HashSet::new();
+    let mut observations = Vec::with_capacity(snapshot.connections.len());
+    for raw in snapshot.connections {
+        let connection: Connection = serde_json::from_value(raw.clone())?;
+        if connection.id.is_empty()
+            || connection.upload < 0
+            || connection.download < 0
+            || connection.upload.checked_add(connection.download).is_none()
+            || !ids.insert(connection.id.clone())
+        {
+            return Err("连接 ID 或字节计数无效".into());
+        }
+        observations.push(Observation { connection, raw });
+    }
+    Ok(observations)
+}
+
+#[derive(Clone, Deserialize)]
+pub struct Proxy {
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub all: Option<Vec<String>>,
+    #[serde(rename = "dialer-proxy", default)]
+    pub dialer_proxy: String,
+}
+
+pub struct Topology {
+    pub proxies: HashMap<String, Proxy>,
+    pub providers: HashMap<String, HashMap<String, Proxy>>,
+    pub raw_context: Value,
+}
+
+impl Topology {
+    pub fn parse(
+        proxies: Value,
+        providers: Value,
+        version: Value,
+        fetched_at: i64,
+    ) -> Result<Self> {
+        #[derive(Deserialize)]
+        struct Proxies {
+            proxies: HashMap<String, Proxy>,
+        }
+        #[derive(Deserialize)]
+        struct ProviderProxy {
+            name: String,
+            #[serde(flatten)]
+            proxy: Proxy,
+        }
+        #[derive(Deserialize)]
+        struct Provider {
+            proxies: Vec<ProviderProxy>,
+        }
+        #[derive(Deserialize)]
+        struct Providers {
+            providers: HashMap<String, Provider>,
+        }
+        let parsed_proxies: Proxies = serde_json::from_value(proxies.clone())?;
+        let parsed_providers: Providers = serde_json::from_value(providers.clone())?;
+        Ok(Self {
+            proxies: parsed_proxies.proxies,
+            providers: parsed_providers
+                .providers
+                .into_iter()
+                .map(|(name, provider)| {
+                    (
+                        name,
+                        provider
+                            .proxies
+                            .into_iter()
+                            .map(|p| (p.name, p.proxy))
+                            .collect(),
+                    )
+                })
+                .collect(),
+            raw_context: serde_json::json!({
+                "fetched_at": fetched_at, "version": version,
+                "proxies": proxies, "providers": providers
+            }),
+        })
+    }
+
+    pub fn attribute(&self, conn: &Connection, main_airport: &str) -> Attribution {
+        let mut groups = Vec::new();
+        let mut terminals = Vec::new();
+        for (index, name) in conn.chains.iter().enumerate() {
+            if self.proxies.get(name).is_some_and(|p| p.all.is_some()) {
+                if !groups.contains(name) {
+                    groups.push(name.clone());
+                }
             } else {
-                println!("更新了 {} 个连接记录", records.len());
+                terminals.push((index, name));
             }
-        });
+        }
+        let mut result = Attribution {
+            airport: None,
+            route_kind: "ambiguous",
+            node: None,
+            groups,
+            reason: None,
+        };
+        if conn
+            .provider_chains
+            .as_ref()
+            .is_some_and(|p| p.len() != conn.chains.len())
+        {
+            result.reason = Some("chain_length_mismatch");
+            return result;
+        }
+        if terminals.len() != 1 {
+            result.reason = Some(if terminals.is_empty() {
+                "missing_terminal"
+            } else {
+                "ambiguous_multihop"
+            });
+            return result;
+        }
+        let (index, name) = terminals[0];
+        result.node = Some(name.clone());
+        let provider = conn
+            .provider_chains
+            .as_ref()
+            .and_then(|p| p[index].as_deref())
+            .filter(|p| !p.is_empty());
+        let proxy = match provider {
+            Some(provider) => self.providers.get(provider).and_then(|p| p.get(name)),
+            None => self.proxies.get(name),
+        };
+        let Some(proxy) = proxy else {
+            result.reason = Some("unresolved_node");
+            return result;
+        };
+        if !proxy.dialer_proxy.is_empty() {
+            result.reason = Some("ambiguous_multihop");
+            return result;
+        }
+        match proxy.kind.as_str() {
+            "Direct" | "DIRECT" => result.route_kind = "direct",
+            "Reject" | "REJECT" | "RejectDrop" => result.route_kind = "reject",
+            "Pass" | "PASS" => result.reason = Some("unresolved_terminal"),
+            _ => {
+                result.route_kind = "proxy";
+                result.airport = Some(provider.unwrap_or(main_airport).to_owned());
+            }
+        }
+        result
     }
-    
-    Ok(())
-} 
+}
+
+pub struct Attribution {
+    pub airport: Option<String>,
+    pub route_kind: &'static str,
+    pub node: Option<String>,
+    pub groups: Vec<String>,
+    pub reason: Option<&'static str>,
+}
