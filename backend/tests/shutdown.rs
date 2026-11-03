@@ -11,14 +11,21 @@ async fn termination_signals_close_database_cleanly() {
             std::process::id()
         ));
         let mut child = Command::new(env!("CARGO_BIN_EXE_mihomo-connections-tracker"))
-            .args([
-                "--main-airport",
-                "测试机场",
-                "--database",
-                database.to_str().unwrap(),
-                "--listen-port",
-                "0",
-            ])
+            .arg("run")
+            .env(
+                "TRACKER_SERVICE_CONFIG",
+                serde_json::json!({
+                    "database": database,
+                    "mihomo_host": "127.0.0.1",
+                    "mihomo_port": 9090,
+                    "mihomo_token": null,
+                    "main_airport": "测试机场",
+                    "listen_host": "127.0.0.1",
+                    "listen_port": 0,
+                    "api_token": null,
+                })
+                .to_string(),
+            )
             .env_remove("MIHOMO_TOKEN")
             .env_remove("TRACKER_API_TOKEN")
             .stdout(Stdio::piped())

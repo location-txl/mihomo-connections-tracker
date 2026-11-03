@@ -1,6 +1,6 @@
 use clap::{CommandFactory, FromArgMatches, Parser, Subcommand};
 
-#[derive(Parser, Clone)]
+#[derive(Parser, Clone, serde::Serialize, serde::Deserialize)]
 #[command(version, about = "采集 Mihomo 连接并提供机场、代理组流量统计")]
 pub struct Config {
     #[arg(long, default_value = "tracker.db")]
@@ -61,8 +61,23 @@ pub enum ServiceCommand {
     Uninstall,
 }
 
+#[derive(Parser)]
+#[command(version, about = "采集 Mihomo 连接并提供机场、代理组流量统计")]
+struct Cli {
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// 管理 macOS 用户级后台服务。
+    Service(ServiceArgs),
+    #[command(hide = true)]
+    Run,
+}
+
 pub enum Invocation {
-    Run(Config),
+    Run,
     Service(ServiceCommand),
 }
 
@@ -75,10 +90,8 @@ pub fn parse_args(
                 .help("SQLite 文件，默认使用用户应用目录中的 tracker.db")
         })
     });
-    let matches = Config::command()
-        .subcommand(service)
-        .subcommand_negates_reqs(true)
-        .args_conflicts_with_subcommands(true)
+    let matches = Cli::command()
+        .mut_subcommand("service", |_| service)
         .try_get_matches_from(args)?;
     if let Some(service) = matches.subcommand_matches("service") {
         let mut command = ServiceArgs::from_arg_matches(service)?.command;
@@ -92,7 +105,7 @@ pub fn parse_args(
         }
         Ok(Invocation::Service(command))
     } else {
-        Ok(Invocation::Run(Config::from_arg_matches(&matches)?))
+        Ok(Invocation::Run)
     }
 }
 
@@ -106,10 +119,26 @@ mod cli_tests {
 
     #[test]
     fn foreground_and_service_arguments_are_separate() {
+        for option in [
+            "--database",
+            "--mihomo-host",
+            "--mihomo-port",
+            "--mihomo-token",
+            "--main-airport",
+            "--listen-host",
+            "--listen-port",
+            "--api-token",
+        ] {
+            assert!(parse(&["tracker", option, "value"]).is_err());
+            assert!(parse(&["tracker", "run", option, "value"]).is_err());
+        }
         assert!(matches!(
-            parse(&["tracker", "--main-airport", "主机场"]).unwrap(),
-            Invocation::Run(_)
+            parse(&["tracker", "run"]).unwrap(),
+            Invocation::Run
         ));
+        let help = Cli::command().render_long_help().to_string();
+        assert!(!help.contains("--database"));
+        assert!(!help.contains("--main-airport"));
         assert!(parse(&["tracker"]).is_err());
         for command in [
             "start",

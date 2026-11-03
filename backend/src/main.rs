@@ -17,7 +17,10 @@ use tokio::sync::watch;
 async fn main() -> Result<()> {
     let config = match config::parse_args(std::env::args_os()).unwrap_or_else(|error| error.exit())
     {
-        Invocation::Run(config) => config,
+        Invocation::Run => serde_json::from_str::<config::Config>(
+            &std::env::var("TRACKER_SERVICE_CONFIG")
+                .map_err(|_| "缺少服务配置，请通过 service install 安装服务")?,
+        )?,
         Invocation::Service(command) => return service::run(command),
     };
     #[cfg(unix)]

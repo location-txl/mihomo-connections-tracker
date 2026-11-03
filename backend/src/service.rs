@@ -14,7 +14,7 @@ pub fn run(command: ServiceCommand) -> Result<()> {
 mod macos {
     use super::*;
     use crate::config::Config;
-    use serde_json::{json, Map, Value};
+    use serde_json::{json, Value};
     use std::{
         fs::{self, OpenOptions},
         io::Write,
@@ -121,7 +121,7 @@ mod macos {
                 std::env::current_dir()?.join(&config.database)
             };
             let binary = std::env::current_exe()?;
-            let definition = definition(&config, &binary, &database, &self.logs);
+            let definition = definition(&config, &binary, &database, &self.logs)?;
             let data = plist(&definition)?;
             self.stop()?;
             fs::create_dir_all(&self.base)?;
@@ -198,31 +198,22 @@ mod macos {
         }
     }
 
-    fn definition(config: &Config, binary: &Path, database: &Path, logs: &Path) -> Value {
-        let mut environment = Map::new();
-        if let Some(token) = &config.mihomo_token {
-            environment.insert("MIHOMO_TOKEN".into(), json!(token));
-        }
-        if let Some(token) = &config.api_token {
-            environment.insert("TRACKER_API_TOKEN".into(), json!(token));
-        }
-        json!({
+    fn definition(config: &Config, binary: &Path, database: &Path, logs: &Path) -> Result<Value> {
+        let mut config = config.clone();
+        config.database = database.to_string_lossy().into_owned();
+        Ok(json!({
             "Label": LABEL,
-            "ProgramArguments": [binary.to_string_lossy().into_owned(),
-                format!("--database={}", database.display()),
-                format!("--mihomo-host={}", config.mihomo_host),
-                format!("--mihomo-port={}", config.mihomo_port),
-                format!("--main-airport={}", config.main_airport),
-                format!("--listen-host={}", config.listen_host),
-                format!("--listen-port={}", config.listen_port)],
-            "EnvironmentVariables": environment,
+            "ProgramArguments": [binary.to_string_lossy().into_owned(), "run"],
+            "EnvironmentVariables": {
+                "TRACKER_SERVICE_CONFIG": serde_json::to_string(&config)?
+            },
             "RunAtLoad": true,
             "KeepAlive": true,
             "ThrottleInterval": 10,
             "ExitTimeOut": 30,
             "StandardOutPath": logs.join("stdout.log").to_string_lossy(),
             "StandardErrorPath": logs.join("stderr.log").to_string_lossy(),
-        })
+        }))
     }
 
     fn plist(value: &Value) -> Result<Vec<u8>> {
@@ -287,7 +278,8 @@ mod macos {
                 Path::new("/tmp/app support/bin/tracker"),
                 Path::new("/tmp/data space/tracker.db"),
                 Path::new("/tmp/logs"),
-            );
+            )
+            .unwrap();
             let bytes = plist(&value).unwrap();
             let mut child = Command::new("/usr/bin/plutil")
                 .args(["-convert", "json", "-o", "-", "-"])
@@ -301,8 +293,18 @@ mod macos {
             let decoded: Value = serde_json::from_slice(&output.stdout).unwrap();
             assert_eq!(decoded, value);
             let arguments = decoded["ProgramArguments"].as_array().unwrap();
-            let parsed =
-                Config::try_parse_from(arguments.iter().map(|arg| arg.as_str().unwrap())).unwrap();
+            assert_eq!(
+                arguments,
+                &vec![json!("/tmp/app support/bin/tracker"), json!("run")]
+            );
+            let parsed: Config = serde_json::from_str(
+                decoded["EnvironmentVariables"]["TRACKER_SERVICE_CONFIG"]
+                    .as_str()
+                    .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(parsed.mihomo_token, config.mihomo_token);
+            assert_eq!(parsed.api_token, config.api_token);
             assert_eq!(parsed.main_airport, config.main_airport);
             assert_eq!(parsed.database, "/tmp/data space/tracker.db");
             assert!(!decoded["ProgramArguments"]

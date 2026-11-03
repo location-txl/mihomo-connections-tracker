@@ -51,27 +51,15 @@ mihomo-connections-tracker --version
 mihomo-connections-tracker --help
 ```
 
-安装后可在任意目录运行 `mihomo-connections-tracker`，无需使用 `./target/release/` 前缀。前台运行时，默认数据库仍是当前工作目录下的 `tracker.db`，可通过 `--database` 指定固定路径。
+安装后可在任意目录使用 `mihomo-connections-tracker service` 管理服务。采集配置只能通过 `service install` 设置，顶层命令不接受配置选项。
 
-## 启动
+## 服务安装参数
 
-```bash
-cd backend
-cargo build --release
-read -rs 'MIHOMO_TOKEN?Mihomo 密钥: '; echo
-export MIHOMO_TOKEN
-./target/release/mihomo-connections-tracker \
-  --mihomo-host 127.0.0.1 \
-  --mihomo-port 9097 \
-  --main-airport '主机场' \
-  --database tracker.db
-```
-
-上面的密钥输入示例适用于 zsh；也可通过进程环境注入 `MIHOMO_TOKEN`。不需要认证时不设置此变量。密钥不写入数据库或日志。
+以下参数仅供 `mihomo-connections-tracker service install` 使用。密钥也可通过 `MIHOMO_TOKEN` 和 `TRACKER_API_TOKEN` 环境变量在安装时注入；不需要认证时不设置。
 
 | 参数 | 默认值 / 含义 |
 |---|---|
-| `--database` | `tracker.db`，SQLite 文件 |
+| `--database` | 服务目录中的 `tracker.db`，SQLite 文件 |
 | `--mihomo-host` | `127.0.0.1`，单个 Mihomo HTTP 控制接口 |
 | `--mihomo-port` | `9090` |
 | `--mihomo-token` | 可选，优先使用环境变量 `MIHOMO_TOKEN` 注入 |
@@ -84,7 +72,7 @@ export MIHOMO_TOKEN
 
 ## macOS 后台服务
 
-提供用户级 LaunchAgent，无需 `sudo`。登录后自动启动，退出登录后停止；进程退出或崩溃后由 launchd 自动拉起，重启节流间隔为 10 秒。电脑休眠期间不会持续采集。其他系统仍可前台运行，`service` 子命令仅支持 macOS。
+提供用户级 LaunchAgent，无需 `sudo`。登录后自动启动，退出登录后停止；进程退出或崩溃后由 launchd 自动拉起，重启节流间隔为 10 秒。电脑休眠期间不会持续采集。`service` 子命令仅支持 macOS。
 
 完成上面的命令行工具安装后，在已登录的 macOS 用户会话中注册后台服务：
 
@@ -97,7 +85,7 @@ mihomo-connections-tracker service install \
   --main-airport '主机场'
 ```
 
-`install` 接受与前台运行相同的参数，立即启动并开启登录自启。它直接使用当前命令的绝对路径运行服务，不再复制另一份可执行文件。建议先通过 Cargo 或 `install` 安装到固定目录，再注册服务；如果直接从 `target/release` 注册，后续清理编译目录会导致服务无法启动。不指定 `--database` 时使用服务目录中的新数据库；接入已有数据库时传入 `--database /绝对路径/tracker.db`，相对路径也会在安装时转为绝对路径。**必须先停止使用该数据库的前台进程，避免两个采集进程同时写入。** 安装不会自动查找、复制或迁移旧数据库，也不会创建自定义数据库路径的父目录。
+`install` 接受上述服务安装参数，立即启动并开启登录自启。它直接使用当前命令的绝对路径运行服务，不再复制另一份可执行文件。建议先通过 Cargo 或 `install` 安装到固定目录，再注册服务；如果直接从 `target/release` 注册，后续清理编译目录会导致服务无法启动。不指定 `--database` 时使用服务目录中的新数据库；接入已有数据库时传入 `--database /绝对路径/tracker.db`，相对路径也会在安装时转为绝对路径。**必须先停止使用该数据库的前台进程，避免两个采集进程同时写入。** 安装不会自动查找、复制或迁移旧数据库，也不会创建自定义数据库路径的父目录。
 
 ```bash
 # 使用 PATH 中的命令管理服务
@@ -118,7 +106,7 @@ mihomo-connections-tracker service uninstall # 保留命令行程序、数据库
 | 登录自启配置 | `Library/LaunchAgents/local.mihomo-connections-tracker.plist` |
 | 标准输出/错误日志 | `Library/Logs/mihomo-connections-tracker/stdout.log`、`stderr.log` |
 
-关闭登录自启只移除自启配置，安装配置仍供 `start` 使用。两个配置文件权限均为 `0600`；通过参数或 `MIHOMO_TOKEN`、`TRACKER_API_TOKEN` 传入的密钥保存在配置的环境变量中，运行时不放入进程命令行。配置含明文密钥，请勿分享；`service status` 只展示运行状态和文件路径，不输出密钥。服务不继承当前终端的其他环境变量。
+关闭登录自启只移除自启配置，安装配置仍供 `start` 使用。两个配置文件权限均为 `0600`；通过参数或 `MIHOMO_TOKEN`、`TRACKER_API_TOKEN` 传入的配置保存在 `TRACKER_SERVICE_CONFIG` 环境变量中，运行时不放入进程命令行。配置含明文密钥，请勿分享；`service status` 只展示运行状态和文件路径，不输出密钥。服务不继承当前终端的其他环境变量。
 
 ### 更新程序
 
@@ -130,6 +118,8 @@ cargo install --path ./backend --root "$HOME/.cargo" --force && \
 ```
 
 安装在 `~/.local/bin` 时使用相应的安装方式和路径。旧进程会在重启前继续运行旧版本；重启后 launchd 从同一路径加载新版本，数据库及日志保留。
+
+旧版服务使用顶层启动参数，升级到此版本后必须重新执行一次 `service install` 更新服务配置。
 
 旧版服务若仍指向 `Library/Application Support/mihomo-connections-tracker/bin/` 中的副本，需要用新安装的命令重新执行一次 `service install` 切换路径，之后即可按上述命令更新。
 
