@@ -1,6 +1,6 @@
 use crate::common::ConnectionRecord;
 use sqlx::{
-    Error as SqlxError, Executor, Sqlite, SqlitePool, query as sqlx_query,
+    AssertSqlSafe, Error as SqlxError, Executor, Sqlite, SqlitePool, query as sqlx_query,
     sqlite::SqliteConnectOptions, Row, Column,
 };
 use std::collections::HashMap;
@@ -97,7 +97,7 @@ impl Database {
     }
 
     // 通用的参数绑定方法
-    fn bind_params<'a>(query: sqlx::query::Query<'a, Sqlite, sqlx::sqlite::SqliteArguments<'a>>, params: &'a [String]) -> sqlx::query::Query<'a, Sqlite, sqlx::sqlite::SqliteArguments<'a>> {
+    fn bind_params<'a>(query: sqlx::query::Query<'a, Sqlite, sqlx::sqlite::SqliteArguments>, params: &'a [String]) -> sqlx::query::Query<'a, Sqlite, sqlx::sqlite::SqliteArguments> {
         let mut bound_query = query;
         for param in params {
             bound_query = bound_query.bind(param);
@@ -110,7 +110,7 @@ impl Database {
     where
         F: FnMut(sqlx::sqlite::SqliteRow) -> T,
     {
-        let query = sqlx::query(sql);
+        let query = sqlx::query(AssertSqlSafe(sql));
         let query = Self::bind_params(query, params);
         let rows = query.fetch_all(&self.pool).await?;
         
@@ -306,7 +306,7 @@ impl Database {
     
     // 执行计数查询
     pub async fn execute_count_query(&self, sql: &str, params: &[String]) -> QueryResult<i64> {
-        let query = sqlx::query(sql);
+        let query = sqlx::query(AssertSqlSafe(sql));
         let query = Self::bind_params(query, params);
         let row = query.fetch_one(&self.pool).await?;
         let count: i64 = row.get(0);
@@ -315,7 +315,7 @@ impl Database {
     
     // 执行流量查询
     pub async fn execute_traffic_query(&self, sql: &str, params: &[String]) -> QueryResult<(i64, i64)> {
-        let query = sqlx::query(sql);
+        let query = sqlx::query(AssertSqlSafe(sql));
         let query = Self::bind_params(query, params);
         let row = query.fetch_one(&self.pool).await?;
         

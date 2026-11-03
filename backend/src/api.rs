@@ -596,7 +596,9 @@ async fn handle_standard_group(
         "network" => ("network", "network"),
         "process" => ("process", "CASE WHEN process = '' OR process IS NULL THEN '进程为空' ELSE process END as process"),
         "destination" => ("destination_ip", "destination_ip"),
-        _ => (group_field, group_field),
+        _ => return Err(warp::reject::custom(ApiError::BadRequest(
+            format!("不支持的分组字段: {}", group_field)
+        ))),
     };
     
     // 构建查询SQL
