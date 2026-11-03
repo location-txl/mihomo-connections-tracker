@@ -133,7 +133,7 @@ fn aggregate_by_name(rows: &[Value]) -> Vec<(String, Usage)> {
         }
     }
     let mut entries: Vec<_> = totals.into_iter().collect();
-    entries.sort_by(|a, b| b.1.total().cmp(&a.1.total()));
+    entries.sort_by_key(|(_, usage)| std::cmp::Reverse(usage.total()));
     entries
 }
 
