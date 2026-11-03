@@ -83,9 +83,9 @@
 
 ## GET /domains
 
-接受与 `/connections` 相同的参数，按域名汇总保留期内的连接日志。`data.items` 中每项包含 `domain`、`connection_count`、`upload`、`download`、`total`，另返回分页及日期范围。按总流量降序、域名排序。
+接受与 `/connections` 相同的参数，按目标（域名优先，无域名按目标 IP）汇总保留期内的连接日志。`data.items` 中每项包含 `domain`、`connection_count`、`upload`、`download`、`total`，另返回 `total_count`、分页及日期范围。按总流量降序、目标排序。
 
-连接数按所选月份内被观察到的连接去重，不是 HTTP 请求数。无域名的连接归入 `domain=null`，目标 IP 不冒充域名。代理组筛选使用成员关系，不因嵌套组重复统计。
+连接数按所选月份内被观察到的连接去重，不是 HTTP 请求数。域名与目标 IP 都缺失的连接归入 `domain=null`。代理组筛选使用成员关系，不因嵌套组重复统计。
 
 ## GET /anomalies
 

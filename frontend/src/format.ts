@@ -32,6 +32,13 @@ export function toDateKey(date: Date): string {
   return `${date.getFullYear()}-${month}-${day}`
 }
 
+/** UTC 毫秒时间戳 → 本地 "MM-dd HH:mm"。 */
+export function formatTime(ms: number): string {
+  const date = new Date(ms)
+  const pad = (value: number) => `${value}`.padStart(2, '0')
+  return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
+}
+
 export function addDays(date: Date, days: number): Date {
   const next = new Date(date)
   next.setDate(next.getDate() + days)

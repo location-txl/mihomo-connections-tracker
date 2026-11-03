@@ -1,11 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
 import { ApiError, fetchStatsRows, type StatsRow } from './api'
+import { ConnectionsPanel } from './components/ConnectionsPanel'
 import { DailyTable } from './components/DailyTable'
 import { RankList } from './components/RankList'
 import { SummaryCards } from './components/SummaryCards'
 import { TimeRangePicker, presetRange, type DateRange, type Preset } from './components/TimeRangePicker'
 import { TokenSetting } from './components/TokenSetting'
 import { UsageChart } from './components/UsageChart'
+import { addDays, toDateKey } from './format'
 import { aggregateByRank, seriesOf, sumUsage, type RankItem } from './stats'
 
 type Dimension = 'global' | 'airport' | 'group'
@@ -69,6 +71,13 @@ export default function App() {
     setRange(nextRange)
     setRows(null)
   }
+
+  // 连接明细按月存储，取范围最后一天（to 为排他日期，前一天仍在范围内）所在月；
+  // 跨月范围展示最近月份的明细。
+  const detailMonth = useMemo(
+    () => toDateKey(addDays(new Date(`${range.to}T00:00`), -1)).slice(0, 7),
+    [range.to],
+  )
 
   const rank = useMemo(() => (rows ? aggregateByRank(rows) : []), [rows])
   const series = useMemo(
@@ -177,6 +186,29 @@ export default function App() {
           </h2>
           <DailyTable rows={series} />
         </section>
+
+        {dimension !== 'global' && selected && (
+          <section className="rounded-lg border border-gray-200 bg-white p-4">
+            <h2 className="mb-3 text-sm font-medium text-gray-700">
+              「{selected.label}」请求记录
+              <span className="ml-1 font-normal text-gray-400">
+                {detailMonth} · 明细保留近 12 个月
+              </span>
+            </h2>
+            {selected.name ? (
+              <ConnectionsPanel
+                key={`${dimension}|${selected.name}|${detailMonth}`}
+                month={detailMonth}
+                airport={dimension === 'airport' ? selected.name : undefined}
+                group={dimension === 'group' ? selected.name : undefined}
+              />
+            ) : (
+              <div className="py-6 text-center text-sm text-gray-400">
+                直连、拒绝、未明确归属的流量没有机场名称，暂不支持明细查询
+              </div>
+            )}
+          </section>
+        )}
       </main>
     </div>
   )

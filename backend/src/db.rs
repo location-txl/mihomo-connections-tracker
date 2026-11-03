@@ -368,20 +368,32 @@ impl Database {
     }
 
     pub async fn domains(&self, filter: &DetailFilter) -> Result<Value> {
+        // 无域名的连接按目标 IP 聚合，两者都缺失时归入 domain=null。
+        let key = "COALESCE(c.domain, NULLIF(c.destination_ip, ''))";
+        let total: i64 = Self::detail_query(&format!("COUNT(DISTINCT {key})"), filter)
+            .build_query_scalar()
+            .fetch_one(&self.pool)
+            .await?;
         let mut query = Self::detail_query(
-            "json_object('domain', c.domain, 'connection_count', COUNT(*), 'upload', SUM(u.upload),
-             'download', SUM(u.download), 'total', SUM(u.upload) + SUM(u.download)) AS item",
+            &format!(
+                "json_object('domain', {key}, 'connection_count', COUNT(*), 'upload', SUM(u.upload),
+             'download', SUM(u.download), 'total', SUM(u.upload) + SUM(u.download)) AS item"
+            ),
             filter,
         );
         query
             .push(
-                " GROUP BY c.domain ORDER BY SUM(u.upload) + SUM(u.download) DESC, c.domain LIMIT ",
+                format!(
+                    " GROUP BY {key} ORDER BY SUM(u.upload) + SUM(u.download) DESC, {key} LIMIT "
+                )
+                .as_str(),
             )
             .push_bind(filter.limit)
             .push(" OFFSET ")
             .push_bind(filter.offset);
         Ok(
-            json!({"items": self.json_rows(&mut query).await?, "limit": filter.limit, "offset": filter.offset,
+            json!({"items": self.json_rows(&mut query).await?, "total_count": total,
+            "limit": filter.limit, "offset": filter.offset,
             "from": filter.from, "to": filter.to}),
         )
     }

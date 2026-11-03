@@ -169,6 +169,31 @@ async fn deltas_cross_days_months_groups_and_domain_queries() {
     assert_eq!(domains["items"][0]["total"], 150);
     f.domain = Some("' OR 1=1 --".into());
     assert_eq!(db.connections(&f).await.unwrap()["total_count"], 0);
+
+    // 无域名的连接按目标 IP 聚合：两条同 IP 连接合并为一行。
+    let mut ip = raw("2", 10, 20, start);
+    ip["metadata"]["host"] = json!("");
+    ip["metadata"]["destinationIP"] = json!("1.2.3.4");
+    ip["chains"] = json!(["香港"]);
+    ip["providerChains"] = json!([""]);
+    let mut ip2 = ip.clone();
+    ip2["id"] = json!("3");
+    ip2["upload"] = json!(1);
+    ip2["download"] = json!(1);
+    db.ingest(
+        &observations(vec![ip, ip2]),
+        &topo,
+        "主机场",
+        time("2026-10-31T16:00:02Z"),
+        since,
+    )
+    .await
+    .unwrap();
+    let domains = db.domains(&filter("2026-11")).await.unwrap();
+    assert_eq!(domains["items"][0]["domain"], "chatgpt.com");
+    assert_eq!(domains["items"][1]["domain"], "1.2.3.4");
+    assert_eq!(domains["items"][1]["connection_count"], 2);
+    assert_eq!(domains["items"][1]["total"], 32);
 }
 
 #[tokio::test]
