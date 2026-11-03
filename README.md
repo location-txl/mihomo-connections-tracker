@@ -2,6 +2,57 @@
 
 Rust 常驻后端直接采集一个 Mihomo，将数据写入 SQLite，提供只读查询 API。本项目不包含 UI，也不再支持 Master/Agent 或数据同步。
 
+## 编译和安装命令行工具
+
+以下命令均从仓库根目录执行，选择一种安装方式即可，无需 `sudo`。
+
+### 编译后安装到 ~/.local/bin
+
+```bash
+cargo build --manifest-path backend/Cargo.toml --release
+mkdir -p "$HOME/.local/bin"
+install -m 755 backend/target/release/mihomo-connections-tracker "$HOME/.local/bin/mihomo-connections-tracker"
+```
+
+如果已设置 `CARGO_TARGET_DIR`，请从对应的 `release` 目录复制可执行文件。
+
+### 使用 cargo install
+
+从本地源码编译并安装到 `~/.cargo/bin`（设置过 `CARGO_HOME` 时使用其下的 `bin`）：
+
+```bash
+cargo install --path ./backend --force
+```
+
+也可以让 Cargo 安装到 `~/.local/bin`：
+
+```bash
+cargo install --path ./backend --root "$HOME/.local" --force
+```
+
+`cargo install` 默认使用 release 配置，`--force` 用于覆盖已有安装。以上命令使用本地源码，无需发布到 crates.io。
+
+### 配置 PATH 并验证
+
+将所选安装目录加入 `PATH`。macOS 默认的 zsh 可在 `~/.zshrc` 中添加对应的一行：
+
+```bash
+# 使用 ~/.local/bin 时
+export PATH="$HOME/.local/bin:$PATH"
+# 使用 Cargo 默认安装目录时
+export PATH="${CARGO_HOME:-$HOME/.cargo}/bin:$PATH"
+```
+
+保存后执行 `source ~/.zshrc`，确认命令可用：
+
+```bash
+command -v mihomo-connections-tracker
+mihomo-connections-tracker --version
+mihomo-connections-tracker --help
+```
+
+安装后可在任意目录运行 `mihomo-connections-tracker`，无需使用 `./target/release/` 前缀。前台运行时，默认数据库仍是当前工作目录下的 `tracker.db`，可通过 `--database` 指定固定路径。
+
 ## 启动
 
 ```bash
@@ -29,7 +80,54 @@ export MIHOMO_TOKEN
 | `--listen-port` | `8080` |
 | `--api-token` | 可选，也可使用 `TRACKER_API_TOKEN`，保护健康检查以外的查询接口 |
 
-按 Ctrl+C 时完成当前数据库事务再退出。连接失败每 5 秒重连；15 秒没有有效快照会重新连接。
+按 Ctrl+C 或收到 SIGTERM 时完成当前数据库事务再退出。连接失败每 5 秒重连；15 秒没有有效快照会重新连接。
+
+## macOS 后台服务
+
+提供用户级 LaunchAgent，无需 `sudo`。登录后自动启动，退出登录后停止；进程退出或崩溃后由 launchd 自动拉起，重启节流间隔为 10 秒。电脑休眠期间不会持续采集。其他系统仍可前台运行，`service` 子命令仅支持 macOS。
+
+完成上面的命令行工具安装后，在已登录的 macOS 用户会话中注册后台服务：
+
+```bash
+read -rs 'MIHOMO_TOKEN?Mihomo 密钥: '; echo
+export MIHOMO_TOKEN
+mihomo-connections-tracker service install \
+  --mihomo-host 127.0.0.1 \
+  --mihomo-port 9097 \
+  --main-airport '主机场'
+```
+
+`install` 接受与前台运行相同的参数，立即启动并开启登录自启。它将当前可执行文件复制到固定位置，后续清理编译目录不会影响服务；仅更新 `~/.local/bin` 或 Cargo 安装目录中的命令不会自动更新正在运行的服务副本。不指定 `--database` 时使用服务目录中的新数据库；接入已有数据库时传入 `--database /绝对路径/tracker.db`，相对路径也会在安装时转为绝对路径。**必须先停止使用该数据库的前台进程，避免两个采集进程同时写入。** 安装不会自动查找、复制或迁移旧数据库，也不会创建自定义数据库路径的父目录。
+
+```bash
+# 使用 PATH 中的命令管理服务
+mihomo-connections-tracker service status
+mihomo-connections-tracker service stop      # 停止当前会话，保留登录自启设置
+mihomo-connections-tracker service start     # 启动当前会话，保留登录自启设置
+mihomo-connections-tracker service restart   # 优雅停止后重新加载
+mihomo-connections-tracker service disable   # 停止并关闭登录自启
+mihomo-connections-tracker service enable    # 开启登录自启并立即启动
+mihomo-connections-tracker service uninstall # 保留数据库和日志
+```
+
+| 文件 | 位置（相对于用户主目录） |
+|---|---|
+| 可执行文件 | `Library/Application Support/mihomo-connections-tracker/bin/mihomo-connections-tracker` |
+| 默认数据库 | `Library/Application Support/mihomo-connections-tracker/tracker.db` |
+| 安装配置 | `Library/Application Support/mihomo-connections-tracker/service.plist` |
+| 登录自启配置 | `Library/LaunchAgents/local.mihomo-connections-tracker.plist` |
+| 标准输出/错误日志 | `Library/Logs/mihomo-connections-tracker/stdout.log`、`stderr.log` |
+
+关闭登录自启只移除自启配置，安装配置仍供 `start` 使用。两个配置文件权限均为 `0600`；通过参数或 `MIHOMO_TOKEN`、`TRACKER_API_TOKEN` 传入的密钥保存在配置的环境变量中，运行时不放入进程命令行。配置含明文密钥，请勿分享；`service status` 只展示运行状态和文件路径，不输出密钥。服务不继承当前终端的其他环境变量。
+
+更新程序时，重新执行上面选择的编译安装命令，再执行 `mihomo-connections-tracker service install` 更新后台服务副本；只更新配置时也执行该命令，提供完整启动参数和所需密钥，已有配置不会合并；需要保留自定义数据库时须再次指定 `--database`。更新先停止旧服务，再替换安装副本和配置，数据库及日志保留。加载成功不代表采集已连接，请用 `service status`、健康检查及日志确认运行情况：
+
+```bash
+tail -f "$HOME/Library/Logs/mihomo-connections-tracker/stderr.log"
+curl http://127.0.0.1:8080/api/v1/health
+```
+
+日志持续追加，当前未配置自动轮转。Mihomo 尚未启动时沿用每 5 秒重连；配置错误或端口冲突导致的退出也会持续重试，应查看错误日志修正后重新安装配置。卸载后若不再需要数据及日志，可另行手动删除保留目录。
 
 ## 统计口径
 
