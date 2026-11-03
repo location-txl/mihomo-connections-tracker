@@ -167,6 +167,26 @@ curl http://127.0.0.1:8080/api/v1/health
 
 ## 查询和验证
 
+### 命令行查询流量
+
+`usage` 子命令直接查询数据库并输出格式化后的上下行流量，不需要服务正在运行：
+
+```bash
+mihomo-connections-tracker usage                 # 最近 7 天全部流量
+mihomo-connections-tracker usage --day           # 今天，也可 --day 2026-11-01
+mihomo-connections-tracker usage --month         # 本月，也可 --month 2026-10
+mihomo-connections-tracker usage --last 30       # 最近 30 天
+
+mihomo-connections-tracker usage --airport       # 列出所有机场及各自流量
+mihomo-connections-tracker usage --airport 飞鸟  # 某个机场
+mihomo-connections-tracker usage --group         # 列出所有代理组
+mihomo-connections-tracker usage --group 节点选择 --month 2026-10
+```
+
+时间参数 `--day` / `--month` / `--last` 三选一，都不传默认最近 7 天；日/月边界为北京时间。`--airport` / `--group` 二选一，不传值时列出该维度全部名称（按流量降序），用于先确认名称再精确查询。单位按 1024 进制格式化为 B/KB/MB/GB。默认读取服务数据库 `Library/Application Support/mihomo-connections-tracker/tracker.db`，前台运行等其他库通过 `--database` 指定。
+
+### 查询 API
+
 ```bash
 curl 'http://127.0.0.1:8080/api/v1/stats?dimension=airport&period=month'
 curl 'http://127.0.0.1:8080/api/v1/stats?dimension=group&period=day'

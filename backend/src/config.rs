@@ -29,6 +29,49 @@ fn nonempty(value: &str) -> Result<String, String> {
     Ok(value.to_owned())
 }
 
+/// 查询流量统计。时间参数三选一，都不传默认最近 7 天。
+#[derive(Parser)]
+pub struct UsageArgs {
+    /// 查询某一天（YYYY-MM-DD），不传值默认今天。
+    #[arg(
+        long,
+        num_args = 0..=1,
+        default_missing_value = "",
+        conflicts_with_all = ["month", "last"]
+    )]
+    pub day: Option<String>,
+    /// 查询某个自然月（YYYY-MM），不传值默认当月。
+    #[arg(
+        long,
+        num_args = 0..=1,
+        default_missing_value = "",
+        conflicts_with_all = ["day", "last"]
+    )]
+    pub month: Option<String>,
+    /// 查询最近 N 天（含今天），不传值默认 7。
+    #[arg(
+        long,
+        num_args = 0..=1,
+        default_missing_value = "7",
+        conflicts_with_all = ["day", "month"]
+    )]
+    pub last: Option<String>,
+    /// 按机场过滤，不传值列出所有机场。
+    #[arg(long, num_args = 0..=1, default_missing_value = "", conflicts_with = "group")]
+    pub airport: Option<String>,
+    /// 按代理组过滤，不传值列出所有代理组。
+    #[arg(
+        long,
+        num_args = 0..=1,
+        default_missing_value = "",
+        conflicts_with = "airport"
+    )]
+    pub group: Option<String>,
+    /// SQLite 文件，默认使用用户应用目录中的 tracker.db。
+    #[arg(long)]
+    pub database: Option<String>,
+}
+
 #[derive(Parser)]
 #[command(name = "service", about = "管理 macOS 用户级后台服务")]
 struct ServiceArgs {
@@ -72,6 +115,8 @@ struct Cli {
 enum Command {
     /// 管理 macOS 用户级后台服务。
     Service(ServiceArgs),
+    /// 查询流量统计。
+    Usage(UsageArgs),
     #[command(hide = true)]
     Run,
 }
@@ -79,6 +124,7 @@ enum Command {
 pub enum Invocation {
     Run,
     Service(ServiceCommand),
+    Usage(UsageArgs),
 }
 
 pub fn parse_args(
@@ -104,6 +150,8 @@ pub fn parse_args(
                 install.value_source("database") == Some(clap::parser::ValueSource::DefaultValue);
         }
         Ok(Invocation::Service(command))
+    } else if let Some(usage) = matches.subcommand_matches("usage") {
+        Ok(Invocation::Usage(UsageArgs::from_arg_matches(usage)?))
     } else {
         Ok(Invocation::Run)
     }
@@ -185,6 +233,60 @@ mod cli_tests {
                 panic!("expected install");
             };
             assert_eq!(default_database, expected);
+        }
+    }
+
+    #[test]
+    fn usage_time_and_dimension_options_parse() {
+        fn parse_usage(args: &[&str]) -> UsageArgs {
+            let Invocation::Usage(usage) = parse(args).unwrap() else {
+                panic!("expected usage");
+            };
+            usage
+        }
+        let usage = parse_usage(&["tracker", "usage"]);
+        assert_eq!(usage.day, None);
+        assert_eq!(usage.month, None);
+        assert_eq!(usage.last, None);
+
+        let usage = parse_usage(&["tracker", "usage", "--day", "2026-11-01"]);
+        assert_eq!(usage.day.as_deref(), Some("2026-11-01"));
+        let usage = parse_usage(&["tracker", "usage", "--day"]);
+        assert_eq!(usage.day.as_deref(), Some(""));
+        let usage = parse_usage(&["tracker", "usage", "--last", "30"]);
+        assert_eq!(usage.last.as_deref(), Some("30"));
+        let usage = parse_usage(&["tracker", "usage", "--last"]);
+        assert_eq!(usage.last.as_deref(), Some("7"));
+        let usage = parse_usage(&[
+            "tracker",
+            "usage",
+            "--airport",
+            "飞鸟",
+            "--database",
+            "x.db",
+        ]);
+        assert_eq!(usage.airport.as_deref(), Some("飞鸟"));
+        assert_eq!(usage.database.as_deref(), Some("x.db"));
+        let usage = parse_usage(&["tracker", "usage", "--group"]);
+        assert_eq!(usage.group.as_deref(), Some(""));
+    }
+
+    #[test]
+    fn usage_rejects_conflicting_options() {
+        for args in [
+            vec!["tracker", "usage", "--day", "--month"],
+            vec!["tracker", "usage", "--day", "--last", "3"],
+            vec!["tracker", "usage", "--month", "--last", "3"],
+            vec![
+                "tracker",
+                "usage",
+                "--airport",
+                "飞鸟",
+                "--group",
+                "自动选择",
+            ],
+        ] {
+            assert!(parse(&args).is_err(), "应互斥：{args:?}");
         }
     }
 }

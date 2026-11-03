@@ -6,6 +6,7 @@ mod db;
 mod service;
 #[cfg(test)]
 mod tests;
+mod usage;
 
 use common::Result;
 use config::Invocation;
@@ -22,6 +23,7 @@ async fn main() -> Result<()> {
                 .map_err(|_| "缺少服务配置，请通过 service install 安装服务")?,
         )?,
         Invocation::Service(command) => return service::run(command),
+        Invocation::Usage(args) => return usage::run(args).await,
     };
     #[cfg(unix)]
     let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
