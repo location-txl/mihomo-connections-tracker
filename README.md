@@ -97,7 +97,7 @@ mihomo-connections-tracker service install \
   --main-airport '主机场'
 ```
 
-`install` 接受与前台运行相同的参数，立即启动并开启登录自启。它将当前可执行文件复制到固定位置，后续清理编译目录不会影响服务；仅更新 `~/.local/bin` 或 Cargo 安装目录中的命令不会自动更新正在运行的服务副本。不指定 `--database` 时使用服务目录中的新数据库；接入已有数据库时传入 `--database /绝对路径/tracker.db`，相对路径也会在安装时转为绝对路径。**必须先停止使用该数据库的前台进程，避免两个采集进程同时写入。** 安装不会自动查找、复制或迁移旧数据库，也不会创建自定义数据库路径的父目录。
+`install` 接受与前台运行相同的参数，立即启动并开启登录自启。它直接使用当前命令的绝对路径运行服务，不再复制另一份可执行文件。建议先通过 Cargo 或 `install` 安装到固定目录，再注册服务；如果直接从 `target/release` 注册，后续清理编译目录会导致服务无法启动。不指定 `--database` 时使用服务目录中的新数据库；接入已有数据库时传入 `--database /绝对路径/tracker.db`，相对路径也会在安装时转为绝对路径。**必须先停止使用该数据库的前台进程，避免两个采集进程同时写入。** 安装不会自动查找、复制或迁移旧数据库，也不会创建自定义数据库路径的父目录。
 
 ```bash
 # 使用 PATH 中的命令管理服务
@@ -107,12 +107,12 @@ mihomo-connections-tracker service start     # 启动当前会话，保留登录
 mihomo-connections-tracker service restart   # 优雅停止后重新加载
 mihomo-connections-tracker service disable   # 停止并关闭登录自启
 mihomo-connections-tracker service enable    # 开启登录自启并立即启动
-mihomo-connections-tracker service uninstall # 保留数据库和日志
+mihomo-connections-tracker service uninstall # 保留命令行程序、数据库和日志
 ```
 
 | 文件 | 位置（相对于用户主目录） |
 |---|---|
-| 可执行文件 | `Library/Application Support/mihomo-connections-tracker/bin/mihomo-connections-tracker` |
+| 可执行文件 | 注册时使用的命令路径，例如 `.cargo/bin/mihomo-connections-tracker` 或 `.local/bin/mihomo-connections-tracker` |
 | 默认数据库 | `Library/Application Support/mihomo-connections-tracker/tracker.db` |
 | 安装配置 | `Library/Application Support/mihomo-connections-tracker/service.plist` |
 | 登录自启配置 | `Library/LaunchAgents/local.mihomo-connections-tracker.plist` |
@@ -120,7 +120,20 @@ mihomo-connections-tracker service uninstall # 保留数据库和日志
 
 关闭登录自启只移除自启配置，安装配置仍供 `start` 使用。两个配置文件权限均为 `0600`；通过参数或 `MIHOMO_TOKEN`、`TRACKER_API_TOKEN` 传入的密钥保存在配置的环境变量中，运行时不放入进程命令行。配置含明文密钥，请勿分享；`service status` 只展示运行状态和文件路径，不输出密钥。服务不继承当前终端的其他环境变量。
 
-更新程序时，重新执行上面选择的编译安装命令，再执行 `mihomo-connections-tracker service install` 更新后台服务副本；只更新配置时也执行该命令，提供完整启动参数和所需密钥，已有配置不会合并；需要保留自定义数据库时须再次指定 `--database`。更新先停止旧服务，再替换安装副本和配置，数据库及日志保留。加载成功不代表采集已连接，请用 `service status`、健康检查及日志确认运行情况：
+### 更新程序
+
+只更新程序时，覆盖原路径下的可执行文件，再重启服务即可，不需要重新输入配置和密钥。在仓库根目录执行：
+
+```bash
+cargo install --path ./backend --root "$HOME/.cargo" --force && \
+  "$HOME/.cargo/bin/mihomo-connections-tracker" service restart
+```
+
+安装在 `~/.local/bin` 时使用相应的安装方式和路径。旧进程会在重启前继续运行旧版本；重启后 launchd 从同一路径加载新版本，数据库及日志保留。
+
+旧版服务若仍指向 `Library/Application Support/mihomo-connections-tracker/bin/` 中的副本，需要用新安装的命令重新执行一次 `service install` 切换路径，之后即可按上述命令更新。
+
+修改配置或更换程序安装路径时，重新执行 `mihomo-connections-tracker service install`，提供完整启动参数和所需密钥，已有配置不会合并；需要保留自定义数据库时须再次指定 `--database`。加载成功不代表采集已连接，请用 `service status`、健康检查及日志确认运行情况：
 
 ```bash
 tail -f "$HOME/Library/Logs/mihomo-connections-tracker/stderr.log"

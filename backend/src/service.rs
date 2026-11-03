@@ -53,10 +53,6 @@ mod macos {
             self.base.join("service.plist")
         }
 
-        fn binary(&self) -> PathBuf {
-            self.base.join("bin").join(BINARY)
-        }
-
         fn target(&self) -> String {
             format!("{}/{LABEL}", self.domain)
         }
@@ -124,17 +120,12 @@ mod macos {
             } else {
                 std::env::current_dir()?.join(&config.database)
             };
-            let definition = definition(&config, &self.binary(), &database, &self.logs);
+            let binary = std::env::current_exe()?;
+            let definition = definition(&config, &binary, &database, &self.logs);
             let data = plist(&definition)?;
-            let source = std::env::current_exe()?;
             self.stop()?;
-            fs::create_dir_all(self.binary().parent().unwrap())?;
+            fs::create_dir_all(&self.base)?;
             fs::create_dir_all(&self.logs)?;
-            // 使用新文件再替换，支持从已安装的可执行文件更新自身。
-            let staged = self.base.join("bin/install.tmp");
-            fs::copy(source, &staged)?;
-            fs::set_permissions(&staged, fs::Permissions::from_mode(0o755))?;
-            fs::rename(staged, self.binary())?;
             write_private(&self.config(), &data)?;
             self.enable()?;
             println!("已安装并开启登录自启；使用 service status 查看进程状态");
@@ -145,7 +136,16 @@ mod macos {
             println!("已安装：{}", self.config().is_file());
             println!("登录自启：{}", self.agent.is_file());
             println!("配置：{}", self.config().display());
-            println!("可执行文件：{}", self.binary().display());
+            if self.config().is_file() {
+                let output = Command::new("/usr/bin/plutil")
+                    .args(["-extract", "ProgramArguments.0", "raw", "-o", "-"])
+                    .arg(self.config())
+                    .output()?;
+                println!(
+                    "可执行文件：{}",
+                    checked(output, "读取服务程序路径")?.trim()
+                );
+            }
             println!("日志：{}", self.logs.display());
             if self.loaded()? {
                 let output = checked(self.launchctl(&["print", &self.target()])?, "查询服务")?;
@@ -265,8 +265,7 @@ mod macos {
                 service.stop()?;
                 remove_if_present(&service.agent)?;
                 remove_if_present(&service.config())?;
-                remove_if_present(&service.binary())?;
-                println!("服务已卸载，数据库和日志已保留");
+                println!("服务已卸载，命令行程序、数据库和日志已保留");
             }
         }
         Ok(())
